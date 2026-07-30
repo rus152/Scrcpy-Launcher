@@ -130,10 +130,44 @@ def parse_extra_arguments(text: str) -> list[str]:
     for line in text.splitlines():
         line = line.strip()
         if line and not line.startswith("#"):
-            # QProcess receives a list, so quotes only group a single argument;
-            # they must not be forwarded to scrcpy as literal characters.
+            # The subprocess is launched with an argument list (no shell), so quotes
+            # only group a single argument; they must not reach scrcpy literally.
             arguments.extend(shlex.split(line, posix=True))
     return arguments
+
+
+def build_profile_settings(raw_values: dict[str, object], inherited: set[str]) -> dict[str, object]:
+    """Resolve a per-app profile's stored settings from a settings-dialog snapshot.
+
+    A key marked `inherited` takes its value from the global settings instead, so it
+    is dropped here rather than stored — including an explicit `False` override of a
+    boolean, which must survive when not inherited.
+    """
+    settings: dict[str, object] = {}
+    for spec in OPTION_SPECS:
+        if not spec.windows_supported or spec.key in inherited or spec.key not in raw_values:
+            continue
+        settings[spec.key] = raw_values[spec.key]
+    return settings
+
+
+# Seeded into the global settings on first run (see LauncherApp._apply_default_global_settings).
+DEFAULT_GLOBAL_SETTINGS: dict[str, object] = {}
+# Bumping this re-seeds any newly added default on existing installations.
+GLOBAL_DEFAULTS_VERSION = 2
+GLOBAL_DEFAULTS_APPLIED_KEY = "global_defaults_applied"
+
+
+def build_global_settings(raw_values: dict[str, object]) -> dict[str, object]:
+    """Resolve the global settings dialog's snapshot, dropping empty/false values."""
+    settings: dict[str, object] = {}
+    for spec in OPTION_SPECS:
+        if not spec.windows_supported:
+            continue
+        value = raw_values.get(spec.key)
+        if value not in (False, "", None):
+            settings[spec.key] = value
+    return settings
 
 
 def validate_launch_settings(settings: dict[str, object], extra_arguments: list[str]) -> list[str]:

@@ -1,6 +1,6 @@
 # Scrcpy Launcher
 
-PyQt6-интерфейс для bundled `scrcpy 4.1` и `adb 37`. Он показывает устройства ADB, позволяет подключать их по IP/порту или сопрягать через Android Wireless Debugging, а затем запускает выбранные Android-приложения в отдельных виртуальных дисплеях scrcpy.
+Интерфейс на Flet (Material Design 3 Expressive) для bundled `scrcpy 4.1` и `adb 37`. Он показывает устройства ADB, позволяет подключать их по IP/порту или сопрягать через Android Wireless Debugging, а затем запускает выбранные Android-приложения в отдельных виртуальных дисплеях scrcpy.
 
 ## Запуск
 

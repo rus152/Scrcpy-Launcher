@@ -6,8 +6,7 @@ import zipfile
 from pathlib import Path
 
 from loguru import logger
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage, QPainter
+from PIL import Image, UnidentifiedImageError
 
 # androguard emits thousands of low-level resource-parser diagnostics for many
 # perfectly valid vendor APKs. Icons are best-effort, so keep that third-party
@@ -116,26 +115,21 @@ def _extract_common_bitmap_icon(apk_path: Path, destination: Path) -> Path | Non
 
 def _normalize_icon(source: Path, destination: Path) -> Path | None:
     """Convert every desktop fallback to the same padded 144×144 PNG."""
-    image = QImage(str(source))
-    if image.isNull():
+    try:
+        with Image.open(source) as opened:
+            image = opened.convert("RGBA")
+    except (OSError, UnidentifiedImageError, ValueError):
         return None
     content_size = NORMALIZED_ICON_SIZE - NORMALIZED_ICON_PADDING * 2
-    scaled = image.scaled(
-        content_size,
-        content_size,
-        Qt.AspectRatioMode.KeepAspectRatio,
-        Qt.TransformationMode.SmoothTransformation,
-    )
-    canvas = QImage(NORMALIZED_ICON_SIZE, NORMALIZED_ICON_SIZE, QImage.Format.Format_ARGB32_Premultiplied)
-    canvas.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(canvas)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-    painter.drawImage((NORMALIZED_ICON_SIZE - scaled.width()) // 2, (NORMALIZED_ICON_SIZE - scaled.height()) // 2, scaled)
-    painter.end()
+    image.thumbnail((content_size, content_size), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGBA", (NORMALIZED_ICON_SIZE, NORMALIZED_ICON_SIZE), (0, 0, 0, 0))
+    offset = ((NORMALIZED_ICON_SIZE - image.width) // 2, (NORMALIZED_ICON_SIZE - image.height) // 2)
+    canvas.paste(image, offset, image)
     normalized = destination.with_suffix(".png")
     normalized.parent.mkdir(parents=True, exist_ok=True)
-    if not canvas.save(str(normalized), "PNG"):
+    try:
+        canvas.save(normalized, "PNG")
+    except OSError:
         return None
     if source != normalized:
         try:

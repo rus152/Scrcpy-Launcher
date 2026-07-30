@@ -1,54 +1,93 @@
 from __future__ import annotations
 
+import asyncio
+from typing import Callable
 from uuid import uuid4
-
-from PyQt6.QtCore import QObject, QProcess, pyqtSignal
 
 from .models import SessionInfo
 
 
-class ScrcpySession(QObject):
-    changed = pyqtSignal(object)
+class ScrcpySession:
+    """One running scrcpy virtual-display process, tracked without a Qt event loop."""
 
-    def __init__(self, program: str, arguments: list[str], serial: str, package: str, title: str, parent: QObject | None = None) -> None:
-        super().__init__(parent)
-        self.info = SessionInfo(uuid4().hex, serial, package, title, arguments)
-        self.process = QProcess(self)
-        self.process.setProgram(program)
-        self.process.setArguments(arguments)
-        self.process.readyReadStandardOutput.connect(self._append_output)
-        self.process.readyReadStandardError.connect(self._append_error)
-        self.process.errorOccurred.connect(self._error)
-        self.process.finished.connect(self._finished)
+    def __init__(
+        self,
+        program: str,
+        arguments: list[str],
+        serial: str,
+        package: str,
+        title: str,
+        on_change: Callable[[SessionInfo], None],
+        device_key: str = "",
+    ) -> None:
+        self.info = SessionInfo(
+            session_id=uuid4().hex,
+            device_serial=serial,
+            package=package,
+            title=title,
+            command=arguments,
+            device_key=device_key or serial,
+        )
+        self._program = program
+        self._arguments = arguments
+        self._on_change = on_change
+        self._process: asyncio.subprocess.Process | None = None
 
-    def start(self) -> None:
-        self.process.start()
-        self.changed.emit(self.info)
+    @property
+    def pid(self) -> int:
+        """PID of the scrcpy process, or 0 before start / after exit."""
+        if self._process is None or self._process.returncode is not None:
+            return 0
+        return self._process.pid
 
-    def stop(self) -> None:
-        if self.process.state() == QProcess.ProcessState.NotRunning:
+    @property
+    def is_running(self) -> bool:
+        return self._process is not None and self._process.returncode is None
+
+    def _changed(self) -> None:
+        self._on_change(self.info)
+
+    async def start(self) -> None:
+        try:
+            self._process = await asyncio.create_subprocess_exec(
+                self._program,
+                *self._arguments,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as error:
+            self.info.state = "error"
+            self.info.log += str(error)
+            self._changed()
+            return
+        asyncio.create_task(self._pump(self._process.stdout))
+        asyncio.create_task(self._pump(self._process.stderr))
+        asyncio.create_task(self._wait())
+        self._changed()
+
+    async def stop(self) -> None:
+        if self._process is None or self._process.returncode is not None:
             return
         self.info.state = "stopping"
-        self.changed.emit(self.info)
-        self.process.terminate()
-        if not self.process.waitForFinished(1500):
-            self.process.kill()
+        self._changed()
+        self._process.terminate()
+        try:
+            await asyncio.wait_for(self._process.wait(), timeout=1.5)
+        except asyncio.TimeoutError:
+            self._process.kill()
 
-    def _append_output(self) -> None:
-        self.info.log += bytes(self.process.readAllStandardOutput()).decode(errors="replace")
-        self.changed.emit(self.info)
+    async def _pump(self, stream: asyncio.StreamReader | None) -> None:
+        if stream is None:
+            return
+        while True:
+            chunk = await stream.read(4096)
+            if not chunk:
+                return
+            self.info.log += chunk.decode(errors="replace")
+            self._changed()
 
-    def _append_error(self) -> None:
-        self.info.log += bytes(self.process.readAllStandardError()).decode(errors="replace")
-        self.changed.emit(self.info)
-
-    def _error(self, _error: QProcess.ProcessError) -> None:
-        self.info.state = "error"
-        self.info.log += f"\n{self.process.errorString()}"
-        self.changed.emit(self.info)
-
-    def _finished(self, exit_code: int, _exit_status: QProcess.ExitStatus) -> None:
-        self._append_output()
-        self._append_error()
+    async def _wait(self) -> None:
+        assert self._process is not None
+        exit_code = await self._process.wait()
         self.info.state = "finished" if exit_code == 0 else f"stopped ({exit_code})"
-        self.changed.emit(self.info)
+        self._changed()

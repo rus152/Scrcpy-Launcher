@@ -15,6 +15,8 @@ class DeviceInfo:
     usb_location: str = ""
     android_version: str = ""
     stable_id: str = ""
+    battery_level: int | None = None
+    battery_charging: bool = False
 
     @property
     def profile_key(self) -> str:
@@ -59,5 +61,9 @@ class SessionInfo:
     package: str
     title: str
     command: list[str]
+    # Stable device identity (DeviceInfo.profile_key) captured at launch, so a
+    # session stays matched to its device after a USB/Wi-Fi reconnect changes the
+    # serial.
+    device_key: str = ""
     state: str = "running"
     log: str = ""

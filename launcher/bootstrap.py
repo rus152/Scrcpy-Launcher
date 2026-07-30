@@ -1,17 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import shutil
 import stat
 import tempfile
-import threading
 import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import Callable
 
-from PyQt6.QtCore import QEventLoop, QThread, Qt, pyqtSignal
-from PyQt6.QtWidgets import QMessageBox, QProgressDialog, QWidget
+import flet as ft
 
 
 SCRCPY_VERSION = "4.1"
@@ -97,116 +97,136 @@ def install_scrcpy_archive(archive_path: Path, project_root: Path) -> Path:
     return target
 
 
-class ScrcpyDownloadThread(QThread):
-    progress = pyqtSignal(int, int)
-    completed = pyqtSignal(str)
-    failed = pyqtSignal(str)
-    aborted = pyqtSignal()
-
-    def __init__(self, project_root: Path, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.project_root = project_root
-        self._cancelled = threading.Event()
-
-    def cancel(self) -> None:
-        self._cancelled.set()
-        self.requestInterruption()
-
-    def _check_cancelled(self) -> None:
-        if self._cancelled.is_set() or self.isInterruptionRequested():
-            raise DownloadCancelled
-
-    def run(self) -> None:
+async def _download_scrcpy(
+    project_root: Path,
+    cancel_event: asyncio.Event,
+    on_progress: Callable[[int, int], None],
+) -> Path:
+    with tempfile.TemporaryDirectory(prefix="scrcpy-download-") as temporary:
+        archive_path = Path(temporary) / SCRCPY_ARCHIVE_NAME
+        request = urllib.request.Request(
+            SCRCPY_DOWNLOAD_URL,
+            headers={"User-Agent": "ScrcpyLauncher/1.0"},
+        )
+        response = await asyncio.to_thread(urllib.request.urlopen, request, timeout=30)
         try:
-            with tempfile.TemporaryDirectory(prefix="scrcpy-download-") as temporary:
-                archive_path = Path(temporary) / SCRCPY_ARCHIVE_NAME
-                request = urllib.request.Request(
-                    SCRCPY_DOWNLOAD_URL,
-                    headers={"User-Agent": "ScrcpyLauncher/1.0"},
-                )
-                with urllib.request.urlopen(request, timeout=30) as response, archive_path.open("wb") as output:
-                    total = int(response.headers.get("Content-Length", "0") or 0)
-                    downloaded = 0
-                    while True:
-                        self._check_cancelled()
-                        chunk = response.read(256 * 1024)
-                        if not chunk:
-                            break
-                        output.write(chunk)
-                        downloaded += len(chunk)
-                        self.progress.emit(downloaded, total)
-                self._check_cancelled()
-                destination = install_scrcpy_archive(archive_path, self.project_root)
-                self._check_cancelled()
-                self.completed.emit(str(destination))
-        except DownloadCancelled:
-            self.aborted.emit()
-        except (OSError, ValueError, zipfile.BadZipFile, urllib.error.URLError) as error:
-            self.failed.emit(str(error))
-        except Exception as error:  # pragma: no cover - defensive GUI boundary
-            self.failed.emit(f"Непредвиденная ошибка: {error}")
+            total = int(response.headers.get("Content-Length", "0") or 0)
+            downloaded = 0
+            with archive_path.open("wb") as output:
+                while True:
+                    if cancel_event.is_set():
+                        raise DownloadCancelled
+                    chunk = await asyncio.to_thread(response.read, 256 * 1024)
+                    if not chunk:
+                        break
+                    output.write(chunk)
+                    downloaded += len(chunk)
+                    on_progress(downloaded, total)
+        finally:
+            response.close()
+        if cancel_event.is_set():
+            raise DownloadCancelled
+        return await asyncio.to_thread(install_scrcpy_archive, archive_path, project_root)
 
 
-def ensure_scrcpy(project_root: Path, parent: QWidget | None = None) -> bool:
+async def ask_yes_no(page: ft.Page, title: str, message: str) -> bool:
+    future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+
+    def respond(value: bool) -> None:
+        if not future.done():
+            future.set_result(value)
+        page.pop_dialog()
+
+    dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Text(title),
+        content=ft.Text(message),
+        actions=[
+            ft.TextButton("Нет", on_click=lambda e: respond(False)),
+            ft.FilledButton("Да", on_click=lambda e: respond(True)),
+        ],
+    )
+    page.show_dialog(dialog)
+    return await future
+
+
+async def show_message(page: ft.Page, title: str, message: str) -> None:
+    future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+    def dismiss(_: object = None) -> None:
+        if not future.done():
+            future.set_result(None)
+        page.pop_dialog()
+
+    dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Text(title),
+        content=ft.Text(message),
+        actions=[ft.FilledButton("ОК", on_click=dismiss)],
+    )
+    page.show_dialog(dialog)
+    await future
+
+
+async def ensure_scrcpy(project_root: Path, page: ft.Page) -> bool:
     """Prompt for and install scrcpy 4.1 if the bundled Windows tools are absent."""
     if scrcpy_is_installed(project_root):
         return True
 
     missing = "\n".join(f"• {path.name}" for path in missing_scrcpy_files(project_root))
-    answer = QMessageBox.question(
-        parent,
+    confirmed = await ask_yes_no(
+        page,
         "Scrcpy не найден",
         f"Рядом с main.py отсутствует комплект scrcpy:\n{missing}\n\n"
         f"Скачать официальный scrcpy {SCRCPY_VERSION} для Windows и распаковать его в папку scrcpy?",
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        QMessageBox.StandardButton.Yes,
     )
-    if answer != QMessageBox.StandardButton.Yes:
+    if not confirmed:
         return False
 
-    dialog = QProgressDialog("Загрузка scrcpy 4.1…", "Отмена", 0, 0, parent)
-    dialog.setWindowTitle("Установка scrcpy")
-    dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-    dialog.setMinimumDuration(0)
-    dialog.setAutoClose(False)
-    dialog.setAutoReset(False)
+    progress_text = ft.Text(f"Загрузка scrcpy {SCRCPY_VERSION}…")
+    progress_bar = ft.ProgressBar(value=None, width=380)
+    cancel_event = asyncio.Event()
+    dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Text("Установка scrcpy"),
+        content=ft.Column([progress_text, progress_bar], tight=True),
+        actions=[ft.TextButton("Отмена", on_click=lambda e: cancel_event.set())],
+    )
+    page.show_dialog(dialog)
 
-    worker = ScrcpyDownloadThread(project_root, parent)
-    loop = QEventLoop()
-    state: dict[str, object] = {"installed": False, "error": "", "cancelled": False}
-
-    def update_progress(downloaded: int, total: int) -> None:
+    def on_progress(downloaded: int, total: int) -> None:
         if total > 0:
-            dialog.setRange(0, 1000)
-            dialog.setValue(min(1000, int(downloaded * 1000 / total)))
-            dialog.setLabelText(f"Загрузка scrcpy 4.1… {downloaded / 1_048_576:.1f} из {total / 1_048_576:.1f} МБ")
+            progress_bar.value = min(1.0, downloaded / total)
+            progress_text.value = (
+                f"Загрузка scrcpy {SCRCPY_VERSION}… {downloaded / 1_048_576:.1f} из {total / 1_048_576:.1f} МБ"
+            )
         else:
-            dialog.setRange(0, 0)
-            dialog.setLabelText(f"Загрузка scrcpy 4.1… {downloaded / 1_048_576:.1f} МБ")
+            progress_bar.value = None
+            progress_text.value = f"Загрузка scrcpy {SCRCPY_VERSION}… {downloaded / 1_048_576:.1f} МБ"
+        page.update()
 
-    worker.progress.connect(update_progress)
-    worker.completed.connect(lambda _path: state.update(installed=True))
-    worker.failed.connect(lambda message: state.update(error=message))
-    worker.aborted.connect(lambda: state.update(cancelled=True))
-    worker.finished.connect(loop.quit)
-    dialog.canceled.connect(worker.cancel)
-    worker.start()
-    dialog.show()
-    loop.exec()
-    worker.wait()
-    dialog.close()
-
-    if state["installed"]:
-        QMessageBox.information(
-            parent,
-            "Scrcpy установлен",
-            f"Scrcpy {SCRCPY_VERSION} загружен и распакован в:\n{scrcpy_directory(project_root)}",
-        )
-        return True
-    if state["error"]:
-        QMessageBox.critical(
-            parent,
+    try:
+        destination = await _download_scrcpy(project_root, cancel_event, on_progress)
+    except DownloadCancelled:
+        page.pop_dialog()
+        return False
+    except (OSError, ValueError, zipfile.BadZipFile, urllib.error.URLError) as error:
+        page.pop_dialog()
+        await show_message(page, "Не удалось установить scrcpy", f"{error}\n\nАрхив: {SCRCPY_DOWNLOAD_URL}")
+        return False
+    except Exception as error:  # pragma: no cover - defensive UI boundary
+        page.pop_dialog()
+        await show_message(
+            page,
             "Не удалось установить scrcpy",
-            f"{state['error']}\n\nАрхив: {SCRCPY_DOWNLOAD_URL}",
+            f"Непредвиденная ошибка: {error}\n\nАрхив: {SCRCPY_DOWNLOAD_URL}",
         )
-    return False
+        return False
+
+    page.pop_dialog()
+    await show_message(
+        page,
+        "Scrcpy установлен",
+        f"Scrcpy {SCRCPY_VERSION} загружен и распакован в:\n{destination}",
+    )
+    return True
