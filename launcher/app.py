@@ -69,7 +69,7 @@ from .options import (
     build_scrcpy_arguments,
 )
 from .profiles import ProfileStore
-from .session import ScrcpySession
+from .session import NO_CONSOLE_WINDOW, ScrcpySession
 from .window_focus import focus_process_window, process_windows
 
 
@@ -286,6 +286,7 @@ async def run_tool(program: Path, arguments: list[str]) -> tuple[int, str, str]:
             *arguments,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            creationflags=NO_CONSOLE_WINDOW,
         )
     except OSError as error:
         return 1, "", str(error)

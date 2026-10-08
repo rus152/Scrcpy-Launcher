@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from typing import Callable
 from uuid import uuid4
 
 from .models import SessionInfo
+
+
+# adb.exe and scrcpy.exe are console programs. Started from the windowless release
+# exe, each would get a console window of its own — a black flash on every adb call.
+NO_CONSOLE_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class ScrcpySession:
@@ -52,6 +58,7 @@ class ScrcpySession:
                 *self._arguments,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                creationflags=NO_CONSOLE_WINDOW,
             )
         except OSError as error:
             self.info.state = "error"
