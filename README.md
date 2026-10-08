@@ -1,6 +1,6 @@
 # Scrcpy Launcher
 
-Интерфейс на Flet (Material Design 3) для bundled `scrcpy 4.1` и `adb 37`. Он показывает устройства ADB, позволяет подключать их по IP/порту или сопрягать через Android Wireless Debugging, а затем запускает выбранные Android-приложения в отдельных виртуальных дисплеях scrcpy.
+Интерфейс на Flet (Material Design 3) для bundled `scrcpy 5.0` и `adb 37`. Он показывает устройства ADB, позволяет подключать их по IP/порту или сопрягать через Android Wireless Debugging, а затем запускает выбранные Android-приложения в отдельных виртуальных дисплеях scrcpy.
 
 ## Запуск
 
@@ -15,7 +15,7 @@ python main.py
 
 При первом запуске программа проверяет `scrcpy/scrcpy.exe` и
 `scrcpy/adb.exe`. Если комплект отсутствует, она предлагает скачать
-[официальный Windows-архив scrcpy 4.1](https://github.com/Genymobile/scrcpy/releases/tag/v4.1)
+[официальный Windows-архив scrcpy 5.0](https://github.com/Genymobile/scrcpy/releases/tag/v5.0)
 и распаковывает его в каталог `scrcpy/` рядом с `main.py`. Загрузку можно
 отменить. Системная установка ADB не используется.
 

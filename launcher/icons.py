@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import shutil
 import zipfile
@@ -50,6 +51,13 @@ def extract_icon_from_apk(apk_path: Path, destination: Path) -> Path | None:
         shutil.rmtree(apk_path.parent, ignore_errors=True)
 
 
+def _write_bitmap(destination: Path, source_name: str, contents: bytes) -> Path:
+    actual_destination = destination.with_suffix(Path(source_name).suffix.lower())
+    actual_destination.parent.mkdir(parents=True, exist_ok=True)
+    actual_destination.write_bytes(contents)
+    return actual_destination
+
+
 def _extract_bitmap_resource(apk, icon_name: str | None, destination: Path) -> Path | None:  # type: ignore[no-untyped-def]
     """Write the exact bitmap resource referenced by the package manifest."""
     if not icon_name:
@@ -60,10 +68,7 @@ def _extract_bitmap_resource(apk, icon_name: str | None, destination: Path) -> P
     contents = apk.get_file(icon_name)
     if not contents:
         return None
-    actual_destination = destination.with_suffix(suffix)
-    actual_destination.parent.mkdir(parents=True, exist_ok=True)
-    actual_destination.write_bytes(contents)
-    return actual_destination
+    return _write_bitmap(destination, icon_name, contents)
 
 
 def _extract_common_bitmap_icon(apk_path: Path, destination: Path) -> Path | None:
@@ -104,11 +109,7 @@ def _extract_common_bitmap_icon(apk_path: Path, destination: Path) -> Path | Non
             if not candidates:
                 return None
             _score, icon_name = max(candidates, key=lambda item: item[0])
-            suffix = Path(icon_name).suffix.lower()
-            actual_destination = destination.with_suffix(suffix)
-            actual_destination.parent.mkdir(parents=True, exist_ok=True)
-            actual_destination.write_bytes(archive.read(icon_name))
-            return actual_destination
+            return _write_bitmap(destination, icon_name, archive.read(icon_name))
     except (OSError, zipfile.BadZipFile, KeyError):
         return None
 
@@ -132,8 +133,6 @@ def _normalize_icon(source: Path, destination: Path) -> Path | None:
     except OSError:
         return None
     if source != normalized:
-        try:
+        with contextlib.suppress(OSError):
             source.unlink()
-        except OSError:
-            pass
     return normalized

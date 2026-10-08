@@ -5,16 +5,17 @@ import re
 import shutil
 import stat
 import tempfile
-import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Callable
+from typing import Callable, TypeVar
 
 import flet as ft
 
+from .i18n import LANGUAGES, get_language, set_language, t
 
-SCRCPY_VERSION = "4.1"
+
+SCRCPY_VERSION = "5.0"
 SCRCPY_ARCHIVE_NAME = f"scrcpy-win64-v{SCRCPY_VERSION}.zip"
 SCRCPY_DOWNLOAD_URL = (
     f"https://github.com/Genymobile/scrcpy/releases/download/v{SCRCPY_VERSION}/{SCRCPY_ARCHIVE_NAME}"
@@ -44,7 +45,7 @@ def _validated_archive_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo
     members = archive.infolist()
     unpacked_size = sum(member.file_size for member in members)
     if unpacked_size > MAX_ARCHIVE_UNPACKED_SIZE:
-        raise ValueError("Архив scrcpy имеет недопустимо большой распакованный размер.")
+        raise ValueError(t("archive.too_large"))
 
     for member in members:
         name = member.filename.replace("\\", "/")
@@ -57,7 +58,7 @@ def _validated_archive_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo
             or ".." in path.parts
             or stat.S_ISLNK(unix_mode)
         ):
-            raise ValueError(f"Небезопасный путь в архиве scrcpy: {member.filename}")
+            raise ValueError(t("archive.unsafe_path", filename=member.filename))
     return members
 
 
@@ -66,7 +67,7 @@ def install_scrcpy_archive(archive_path: Path, project_root: Path) -> Path:
     project_root = project_root.resolve()
     target = scrcpy_directory(project_root)
     if target.exists() and not target.is_dir():
-        raise ValueError(f"Путь установки занят файлом: {target}")
+        raise ValueError(t("install.path_occupied", target=target))
 
     with tempfile.TemporaryDirectory(prefix="scrcpy-extract-") as temporary:
         extraction_root = Path(temporary).resolve()
@@ -88,12 +89,12 @@ def install_scrcpy_archive(archive_path: Path, project_root: Path) -> Path:
             if (executable.parent / "adb.exe").is_file()
         ]
         if len(candidates) != 1:
-            raise ValueError("В архиве не найден однозначный комплект scrcpy.exe и adb.exe.")
+            raise ValueError(t("install.ambiguous_bundle"))
         shutil.copytree(candidates[0], target, dirs_exist_ok=True)
 
     missing = missing_scrcpy_files(project_root)
     if missing:
-        raise OSError("После распаковки отсутствуют файлы: " + ", ".join(str(path) for path in missing))
+        raise OSError(t("install.files_missing_after_extract", missing=", ".join(str(path) for path in missing)))
     return target
 
 
@@ -129,80 +130,150 @@ async def _download_scrcpy(
         return await asyncio.to_thread(install_scrcpy_archive, archive_path, project_root)
 
 
-async def ask_yes_no(page: ft.Page, title: str, message: str) -> bool:
-    future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+T = TypeVar("T")
 
-    def respond(value: bool) -> None:
+
+async def _await_dialog(page: ft.Page, build: Callable[[Callable[[T], None]], ft.AlertDialog]) -> T:
+    future: asyncio.Future[T] = asyncio.get_running_loop().create_future()
+
+    def respond(value: T) -> None:
         if not future.done():
             future.set_result(value)
         page.pop_dialog()
 
-    dialog = ft.AlertDialog(
-        modal=True,
-        title=ft.Text(title),
-        content=ft.Text(message),
-        actions=[
-            ft.TextButton("Нет", on_click=lambda e: respond(False)),
-            ft.FilledButton("Да", on_click=lambda e: respond(True)),
-        ],
-    )
-    page.show_dialog(dialog)
+    page.show_dialog(build(respond))
     return await future
 
 
-async def show_message(page: ft.Page, title: str, message: str) -> None:
-    future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-
-    def dismiss(_: object = None) -> None:
-        if not future.done():
-            future.set_result(None)
-        page.pop_dialog()
-
-    dialog = ft.AlertDialog(
-        modal=True,
-        title=ft.Text(title),
-        content=ft.Text(message),
-        actions=[ft.FilledButton("ОК", on_click=dismiss)],
+async def ask_yes_no(page: ft.Page, title: str, message: str) -> bool:
+    return await _await_dialog(
+        page,
+        lambda respond: ft.AlertDialog(
+            modal=True,
+            title=ft.Text(title),
+            content=ft.Text(message),
+            actions=[
+                ft.TextButton(t("common.no"), on_click=lambda e: respond(False)),
+                ft.FilledButton(t("common.yes"), on_click=lambda e: respond(True)),
+            ],
+        ),
     )
-    page.show_dialog(dialog)
-    await future
+
+
+async def ask_language(page: ft.Page) -> str:
+    """First-run language question, preselected to the current (detected) language.
+
+    Asked before anything else so every later dialog — including the scrcpy download
+    prompt below — is already in the user's language. The options are labelled with
+    each language's own endonym, so the dialog stays readable even when the detected
+    language guessed wrong.
+    """
+    dropdown = ft.Dropdown(
+        value=get_language(),
+        options=[ft.DropdownOption(key=code, text=name) for code, name in LANGUAGES.items()],
+        width=200,
+        dense=True,
+    )
+    title = ft.Text(value=t("language.choose_title"))
+    message = ft.Text(value=t("language.choose_message"))
+    # The message points at a button the user hasn't seen yet, so it is shown rather
+    # than described: same icon, same rounded surface it sits on in the app bar.
+    hint_label = ft.Text(value=t("launcher_settings.title"), size=13)
+    hint = ft.Row(
+        controls=[
+            ft.Container(
+                content=ft.Icon(ft.Icons.TUNE, size=20, color=ft.Colors.ON_SURFACE),
+                width=40,
+                height=40,
+                border_radius=20,
+                alignment=ft.Alignment.CENTER,
+                bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+            ),
+            hint_label,
+        ],
+        spacing=10,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+    confirm_button = ft.FilledButton(content=t("common.continue"))
+
+    def preview(_: ft.ControlEvent) -> None:
+        # Retranslate the dialog's own text as the selection moves, so the language is
+        # previewed live instead of only taking effect once the dialog is gone.
+        if dropdown.value:
+            set_language(dropdown.value)
+        title.value = t("language.choose_title")
+        message.value = t("language.choose_message")
+        hint_label.value = t("launcher_settings.title")
+        confirm_button.content = t("common.continue")
+        page.update()
+
+    dropdown.on_select = preview
+
+    def build(respond: Callable[[str], None]) -> ft.AlertDialog:
+        confirm_button.on_click = lambda e: respond(dropdown.value or get_language())
+        return ft.AlertDialog(
+            modal=True,
+            title=title,
+            content=ft.Column(controls=[message, hint, dropdown], tight=True, width=380, spacing=16),
+            actions=[confirm_button],
+        )
+
+    return await _await_dialog(page, build)
+
+
+async def show_message(page: ft.Page, title: str, message: str) -> None:
+    await _await_dialog(
+        page,
+        lambda respond: ft.AlertDialog(
+            modal=True,
+            title=ft.Text(title),
+            content=ft.Text(message),
+            actions=[ft.FilledButton(t("common.ok"), on_click=lambda e: respond(None))],
+        ),
+    )
 
 
 async def ensure_scrcpy(project_root: Path, page: ft.Page) -> bool:
-    """Prompt for and install scrcpy 4.1 if the bundled Windows tools are absent."""
+    """Prompt for and install scrcpy 5.0 if the bundled Windows tools are absent."""
     if scrcpy_is_installed(project_root):
         return True
 
     missing = "\n".join(f"• {path.name}" for path in missing_scrcpy_files(project_root))
     confirmed = await ask_yes_no(
         page,
-        "Scrcpy не найден",
-        f"Рядом с main.py отсутствует комплект scrcpy:\n{missing}\n\n"
-        f"Скачать официальный scrcpy {SCRCPY_VERSION} для Windows и распаковать его в папку scrcpy?",
+        t("bootstrap.not_found_title"),
+        t("bootstrap.not_found_message", missing=missing, version=SCRCPY_VERSION),
     )
     if not confirmed:
         return False
 
-    progress_text = ft.Text(f"Загрузка scrcpy {SCRCPY_VERSION}…")
+    progress_text = ft.Text(t("bootstrap.downloading", version=SCRCPY_VERSION))
     progress_bar = ft.ProgressBar(value=None, width=380)
     cancel_event = asyncio.Event()
     dialog = ft.AlertDialog(
         modal=True,
-        title=ft.Text("Установка scrcpy"),
+        title=ft.Text(t("bootstrap.installing_title")),
         content=ft.Column([progress_text, progress_bar], tight=True),
-        actions=[ft.TextButton("Отмена", on_click=lambda e: cancel_event.set())],
+        actions=[ft.TextButton(t("common.cancel"), on_click=lambda e: cancel_event.set())],
     )
     page.show_dialog(dialog)
 
     def on_progress(downloaded: int, total: int) -> None:
         if total > 0:
             progress_bar.value = min(1.0, downloaded / total)
-            progress_text.value = (
-                f"Загрузка scrcpy {SCRCPY_VERSION}… {downloaded / 1_048_576:.1f} из {total / 1_048_576:.1f} МБ"
+            progress_text.value = t(
+                "bootstrap.downloading_progress",
+                version=SCRCPY_VERSION,
+                downloaded=downloaded / 1_048_576,
+                total=total / 1_048_576,
             )
         else:
             progress_bar.value = None
-            progress_text.value = f"Загрузка scrcpy {SCRCPY_VERSION}… {downloaded / 1_048_576:.1f} МБ"
+            progress_text.value = t(
+                "bootstrap.downloading_progress_unknown",
+                version=SCRCPY_VERSION,
+                downloaded=downloaded / 1_048_576,
+            )
         page.update()
 
     try:
@@ -210,23 +281,27 @@ async def ensure_scrcpy(project_root: Path, page: ft.Page) -> bool:
     except DownloadCancelled:
         page.pop_dialog()
         return False
-    except (OSError, ValueError, zipfile.BadZipFile, urllib.error.URLError) as error:
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
         page.pop_dialog()
-        await show_message(page, "Не удалось установить scrcpy", f"{error}\n\nАрхив: {SCRCPY_DOWNLOAD_URL}")
+        await show_message(
+            page,
+            t("bootstrap.install_failed_title"),
+            t("bootstrap.install_failed_message", error=error, url=SCRCPY_DOWNLOAD_URL),
+        )
         return False
     except Exception as error:  # pragma: no cover - defensive UI boundary
         page.pop_dialog()
         await show_message(
             page,
-            "Не удалось установить scrcpy",
-            f"Непредвиденная ошибка: {error}\n\nАрхив: {SCRCPY_DOWNLOAD_URL}",
+            t("bootstrap.install_failed_title"),
+            t("bootstrap.install_unexpected_error", error=error, url=SCRCPY_DOWNLOAD_URL),
         )
         return False
 
     page.pop_dialog()
     await show_message(
         page,
-        "Scrcpy установлен",
-        f"Scrcpy {SCRCPY_VERSION} загружен и распакован в:\n{destination}",
+        t("bootstrap.installed_title"),
+        t("bootstrap.installed_message", version=SCRCPY_VERSION, destination=destination),
     )
     return True

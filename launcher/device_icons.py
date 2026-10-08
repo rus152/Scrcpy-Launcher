@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 from dataclasses import dataclass
@@ -46,13 +47,19 @@ def rendered_icon_directory(cache_dir: Path, device_key: str) -> Path:
     return cache_dir / "android-rendered-icons-v3" / device_token
 
 
-def _package_token(package: str) -> str:
-    return hashlib.sha256(package.encode("utf-8")).hexdigest()[:24]
+def _package_prefix(package: str) -> str:
+    return hashlib.sha256(package.encode("utf-8")).hexdigest()[:24] + "-"
+
+
+def _replace_atomically(destination: Path, data: bytes) -> None:
+    temporary = destination.with_suffix(".tmp")
+    temporary.write_bytes(data)
+    temporary.replace(destination)
 
 
 def cached_rendered_icon(cache_dir: Path, device_key: str, package: str) -> tuple[str, Path | None]:
     directory = rendered_icon_directory(cache_dir, device_key)
-    token = _package_token(package) + "-"
+    token = _package_prefix(package)
     candidates = sorted(directory.glob(token + "*.png"), key=lambda path: path.stat().st_mtime, reverse=True)
     if not candidates:
         return "", None
@@ -66,17 +73,13 @@ def write_rendered_icon(cache_dir: Path, device_key: str, record: DeviceAppRecor
         return existing
     directory = rendered_icon_directory(cache_dir, device_key)
     directory.mkdir(parents=True, exist_ok=True)
-    prefix = _package_token(record.package) + "-"
+    prefix = _package_prefix(record.package)
     destination = directory / f"{prefix}{record.revision}.png"
-    temporary = destination.with_suffix(".tmp")
-    temporary.write_bytes(record.png)
-    temporary.replace(destination)
+    _replace_atomically(destination, record.png)
     for stale in directory.glob(prefix + "*.png"):
         if stale != destination:
-            try:
+            with contextlib.suppress(OSError):
                 stale.unlink()
-            except OSError:
-                pass
     return destination
 
 
@@ -104,7 +107,6 @@ def write_cached_app_records(cache_dir: Path, device_key: str, records: dict[str
     directory = rendered_icon_directory(cache_dir, device_key)
     directory.mkdir(parents=True, exist_ok=True)
     index = directory / "catalog.json"
-    temporary = index.with_suffix(".tmp")
     payload = {
         package: {
             "label": record.label,
@@ -113,8 +115,7 @@ def write_cached_app_records(cache_dir: Path, device_key: str, records: dict[str
         }
         for package, record in sorted(records.items())
     }
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    temporary.replace(index)
+    _replace_atomically(index, json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
 def helper_package_argument(package: str, cached_revision: str = "") -> str:

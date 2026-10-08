@@ -36,9 +36,7 @@ class ScrcpySession:
     @property
     def pid(self) -> int:
         """PID of the scrcpy process, or 0 before start / after exit."""
-        if self._process is None or self._process.returncode is not None:
-            return 0
-        return self._process.pid
+        return self._process.pid if self.is_running else 0
 
     @property
     def is_running(self) -> bool:
@@ -66,14 +64,14 @@ class ScrcpySession:
         self._changed()
 
     async def stop(self) -> None:
-        if self._process is None or self._process.returncode is not None:
+        if not self.is_running:
             return
         self.info.state = "stopping"
         self._changed()
         self._process.terminate()
         try:
             await asyncio.wait_for(self._process.wait(), timeout=1.5)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._process.kill()
 
     async def _pump(self, stream: asyncio.StreamReader | None) -> None:

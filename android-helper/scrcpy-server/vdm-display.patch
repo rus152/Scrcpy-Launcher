@@ -1,0 +1,165 @@
+diff --git a/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java b/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
+index 5ed4c73..01d1634 100644
+--- a/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
++++ b/server/src/main/java/com/genymobile/scrcpy/video/NewDisplayCapture.java
+@@ -17,6 +17,7 @@ import com.genymobile.scrcpy.opengl.OpenGLRunner;
+ import com.genymobile.scrcpy.util.AffineMatrix;
+ import com.genymobile.scrcpy.util.Ln;
+ import com.genymobile.scrcpy.wrappers.ServiceManager;
++import com.genymobile.scrcpy.wrappers.VirtualDevice;
+ 
+ import android.graphics.Rect;
+ import android.hardware.display.VirtualDisplay;
+@@ -65,6 +66,7 @@ public class NewDisplayCapture extends SurfaceCapture {
+     private VideoConstraints videoConstraints;
+ 
+     private VirtualDisplay virtualDisplay;
++    private VirtualDevice virtualDevice; // owns virtualDisplay, if not null
+     private Size videoSize;
+     private Size displaySize; // the logical size of the display (including rotation)
+     private Size physicalSize; // the physical size of the display (without rotation)
+@@ -231,8 +233,24 @@ public class NewDisplayCapture extends SurfaceCapture {
+                             | VIRTUAL_DISPLAY_FLAG_DEVICE_DISPLAY_GROUP;
+                 }
+             }
+-            VirtualDisplay vd = ServiceManager.getDisplayManager()
+-                    .createNewVirtualDisplay("scrcpy", displaySize.getWidth(), displaySize.getHeight(), dpi, surface, flags);
++            VirtualDisplay vd = null;
++            virtualDevice = VirtualDevice.create("scrcpy");
++            if (virtualDevice != null) {
++                try {
++                    // The virtual device puts the display in its own group, OWN_DISPLAY_GROUP would move it back to the default one
++                    vd = virtualDevice.createVirtualDisplay("scrcpy", displaySize.getWidth(), displaySize.getHeight(), dpi, surface,
++                            flags & ~VIRTUAL_DISPLAY_FLAG_OWN_DISPLAY_GROUP);
++                    Ln.i("New display owned by a virtual device");
++                } catch (Exception e) {
++                    Ln.w("Could not create display on the virtual device", e);
++                    virtualDevice.close();
++                    virtualDevice = null;
++                }
++            }
++            if (vd == null) {
++                vd = ServiceManager.getDisplayManager()
++                        .createNewVirtualDisplay("scrcpy", displaySize.getWidth(), displaySize.getHeight(), dpi, surface, flags);
++            }
+             setCurrentVirtualDisplay(vd); // used for client resize
+             int virtualDisplayId = vd.getDisplay().getDisplayId();
+             Ln.i("New display: " + displaySize.getWidth() + "x" + displaySize.getHeight() + "/" + dpi + " (id=" + virtualDisplayId + ")");
+@@ -307,6 +325,11 @@ public class NewDisplayCapture extends SurfaceCapture {
+                 setCurrentVirtualDisplay(null);
+             }
+         }
++
++        if (virtualDevice != null) {
++            virtualDevice.close();
++            virtualDevice = null;
++        }
+     }
+ 
+     @Override
+diff --git a/server/src/main/java/com/genymobile/scrcpy/wrappers/VirtualDevice.java b/server/src/main/java/com/genymobile/scrcpy/wrappers/VirtualDevice.java
+new file mode 100644
+index 0000000..430b740
+--- /dev/null
++++ b/server/src/main/java/com/genymobile/scrcpy/wrappers/VirtualDevice.java
+@@ -0,0 +1,100 @@
++package com.genymobile.scrcpy.wrappers;
++
++import com.genymobile.scrcpy.AndroidVersions;
++import com.genymobile.scrcpy.FakeContext;
++import com.genymobile.scrcpy.util.Ln;
++
++import android.annotation.TargetApi;
++import android.companion.AssociationInfo;
++import android.companion.CompanionDeviceManager;
++import android.content.Context;
++import android.hardware.display.VirtualDisplay;
++import android.hardware.display.VirtualDisplayConfig;
++import android.os.Build;
++import android.os.IInterface;
++import android.view.Surface;
++
++import java.util.concurrent.Executor;
++
++/**
++ * A VirtualDeviceManager virtual device, used only to own the new display.
++ * <p>
++ * A display owned by a virtual device lives in the device's own display (and power) group, so it keeps running while the main display is
++ * off. A plain virtual display cannot: since Android 17 (flag separate_timeouts), it is put in the default group whatever its flags.
++ * <p>
++ * This requires a CDM association with the app streaming profile for com.android.shell, created beforehand with:
++ * <pre>adb shell cmd companiondevice associate 0 com.android.shell 02:00:00:00:5c:01 android.app.role.COMPANION_DEVICE_APP_STREAMING</pre>
++ */
++@TargetApi(AndroidVersions.API_34_ANDROID_14)
++public final class VirtualDevice {
++
++    private static final String PROFILE_APP_STREAMING = "android.app.role.COMPANION_DEVICE_APP_STREAMING";
++    private static final int LOCK_STATE_ALWAYS_UNLOCKED = 1; // VirtualDeviceParams.LOCK_STATE_ALWAYS_UNLOCKED
++
++    private final Object device; // android.companion.virtual.VirtualDeviceManager.VirtualDevice
++
++    private VirtualDevice(Object device) {
++        this.device = device;
++    }
++
++    /**
++     * Create a virtual device, or return null if there is no suitable association or virtual devices are not available.
++     */
++    public static VirtualDevice create(String name) {
++        if (Build.VERSION.SDK_INT < AndroidVersions.API_34_ANDROID_14) {
++            return null;
++        }
++        try {
++            int associationId = findAssociationId();
++            if (associationId == -1) {
++                return null;
++            }
++
++            Class<?> managerClass = Class.forName("android.companion.virtual.VirtualDeviceManager");
++            Class<?> serviceClass = Class.forName("android.companion.virtual.IVirtualDeviceManager");
++            IInterface service = ServiceManager.getService("virtualdevice", serviceClass.getName());
++            Object manager = managerClass.getConstructor(serviceClass, Context.class).newInstance(service, FakeContext.get());
++
++            Class<?> paramsClass = Class.forName("android.companion.virtual.VirtualDeviceParams");
++            Class<?> builderClass = Class.forName("android.companion.virtual.VirtualDeviceParams$Builder");
++            Object builder = builderClass.getConstructor().newInstance();
++            builderClass.getMethod("setName", String.class).invoke(builder, name);
++            builderClass.getMethod("setLockState", int.class).invoke(builder, LOCK_STATE_ALWAYS_UNLOCKED);
++            Object params = builderClass.getMethod("build").invoke(builder);
++
++            Object device = managerClass.getMethod("createVirtualDevice", int.class, paramsClass).invoke(manager, associationId, params);
++            return new VirtualDevice(device);
++        } catch (Exception | AssertionError e) {
++            Ln.w("Could not create virtual device", e);
++            return null;
++        }
++    }
++
++    private static int findAssociationId() throws ReflectiveOperationException {
++        Class<?> serviceClass = Class.forName("android.companion.ICompanionDeviceManager");
++        IInterface service = ServiceManager.getService("companiondevice", serviceClass.getName());
++        CompanionDeviceManager cdm = CompanionDeviceManager.class.getConstructor(serviceClass, Context.class).newInstance(service, FakeContext.get());
++        for (AssociationInfo association : cdm.getMyAssociations()) {
++            if (PROFILE_APP_STREAMING.equals(association.getDeviceProfile())) {
++                return association.getId();
++            }
++        }
++        return -1;
++    }
++
++    public VirtualDisplay createVirtualDisplay(String name, int width, int height, int dpi, Surface surface, int flags)
++            throws ReflectiveOperationException {
++        VirtualDisplayConfig config = new VirtualDisplayConfig.Builder(name, width, height, dpi).setFlags(flags).setSurface(surface).build();
++        return (VirtualDisplay) device.getClass()
++                .getMethod("createVirtualDisplay", VirtualDisplayConfig.class, Executor.class, VirtualDisplay.Callback.class)
++                .invoke(device, config, null, null);
++    }
++
++    public void close() {
++        try {
++            device.getClass().getMethod("close").invoke(device);
++        } catch (ReflectiveOperationException e) {
++            Ln.e("Could not close virtual device", e);
++        }
++    }
++}
