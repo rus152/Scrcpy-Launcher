@@ -1,10 +1,21 @@
 # Scrcpy Launcher
 
-Интерфейс на Flet (Material Design 3) для bundled `scrcpy 5.0` и `adb 37`. Он показывает устройства ADB, позволяет подключать их по IP/порту или сопрягать через Android Wireless Debugging, а затем запускает выбранные Android-приложения в отдельных виртуальных дисплеях scrcpy.
+[Русская версия](README.ru.md)
 
-## Запуск
+A Windows desktop launcher built with Flet (Material Design 3) around bundled
+`scrcpy 5.0` and `adb 37`. It lists ADB devices, connects them over USB or
+Wi‑Fi (including Android 11+ Wireless Debugging pairing), and opens the Android
+apps you pick, each in its own scrcpy virtual display window.
 
-Требуются Windows, Python 3.13+ и телефон с включённой отладкой ADB.
+- English and Russian interface, switchable at any time.
+- Per-app launch profiles and favorites, stored locally per device.
+- App windows keep running while the phone's screen is off, including on
+  Android 17.
+- Device battery level in the app bar.
+
+## Getting started
+
+Requires Windows, Python 3.13+ and a phone with ADB debugging enabled.
 
 ```powershell
 python -m venv .venv
@@ -13,65 +24,102 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-При первом запуске программа проверяет `scrcpy/scrcpy.exe` и
-`scrcpy/adb.exe`. Если комплект отсутствует, она предлагает скачать
-[официальный Windows-архив scrcpy 5.0](https://github.com/Genymobile/scrcpy/releases/tag/v5.0)
-и распаковывает его в каталог `scrcpy/` рядом с `main.py`. Загрузку можно
-отменить. Системная установка ADB не используется.
+On first launch the app asks for the interface language and checks for
+`scrcpy/scrcpy.exe` and `scrcpy/adb.exe`. If they are missing, it offers to
+download the
+[official scrcpy 5.0 Windows archive](https://github.com/Genymobile/scrcpy/releases/tag/v5.0)
+and unpacks it into `scrcpy/` next to `main.py`. The download can be cancelled.
+A system-wide ADB install is never used.
 
-## Подключение телефона
+## Connecting a phone
+
+The app opens on a device list. Click a phone to connect and load its apps.
 
 ### USB
 
-1. На телефоне включите «Для разработчиков» и «Отладка по USB».
-2. Подключите кабель и подтвердите RSA-ключ на экране Android.
-3. В приложении нажмите «Обновить устройства», выберите строку со статусом `device`.
+1. On the phone, enable Developer options and USB debugging.
+2. Plug in the cable and accept the RSA key prompt on the phone.
+3. Press **Refresh** and click the device with the **Online** status.
 
-Статус `unauthorized` означает, что нужно разблокировать телефон и подтвердить ключ. `offline` означает, что ADB пока не готов: переподключите устройство или обновите список.
+**Unauthorized** means the phone has to be unlocked and the key accepted.
+**Offline** means ADB isn't ready yet: reconnect the device or refresh the list.
 
-### Wi‑Fi Pair (Android 11+)
+### Wi‑Fi pairing (Android 11+)
 
-1. Подключите ПК и телефон к одной Wi‑Fi сети.
-2. На телефоне откройте: «Для разработчиков» → «Беспроводная отладка» → «Подключить устройство с кодом».
-3. В окне **Pair** введите IP, **порт Pair** и код с телефона.
-4. После успешного Pair программа ищет отдельный порт подключения через mDNS. Если сеть блокирует mDNS, откройте **Подключить IP:порт** и введите IP и **порт подключения** из настроек беспроводной отладки.
+1. Put the PC and the phone on the same Wi‑Fi network.
+2. On the phone, open Developer options → Wireless debugging → "Pair device
+   with pairing code".
+3. In the app, press **Connect via IP / Pair**, then **Pair**, and enter the IP,
+   the **pair port** and the code from the phone.
+4. After pairing, the app looks up the separate connection port over mDNS. If
+   the network blocks mDNS, enter the IP and the **connection port** from the
+   Wireless debugging screen in the **Device manager**.
 
-Порт Pair и порт подключения различаются; порт Pair нельзя вводить в диалог подключения.
+The pair port and the connection port are different; the pair port won't work
+for connecting.
 
-## Приложения и профили
+### Unsupported devices
 
-После выбора устройства каталог строится по полному выводу
-`pm list packages --user <текущий пользователь>`. Поэтому в нём присутствуют
-не только приложения с обычной launcher-активностью. Включите «Системные
-пакеты», чтобы увидеть предустановленные пакеты.
+Watches and Android TV boxes are detected and marked **Unsupported**: a watch
+can't run an app on a display of its own, and a TV box opens the app on the
+television's screen while the scrcpy window stays blank.
 
-Названия и иконки загружает `launcher/resources/icon-dumper.dex`: программа
-временно отправляет его через ADB в `/data/local/tmp/scrcpy-launcher` и запускает
-через Android `app_process`. Помощник не устанавливается как APK, не появляется
-в списке приложений и не требует root. Android сам отрисовывает обычные,
-векторные и adaptive icons в единый формат PNG 144×144 с одинаковой безопасной
-зоной. Три ADB-процесса обрабатывают независимые пачки приложений параллельно.
-Результат хранится в постоянном локальном кэше с учётом устройства, пакета и
-его `versionCode`. Вместе с PNG сохраняются название и системный статус, поэтому
-при следующем запуске DEX обрабатывает только новые или обновлённые приложения.
-Если прошивка запрещает
-`app_process`, автоматически используется резервное извлечение из APK через
-ADB. Scrcpy не участвует в построении интерфейса и применяется только при
-запуске выбранного приложения.
+## Apps and profiles
 
-Кнопка `Профиль` создаёт профиль для конкретного устройства и пакета. У каждого параметра профиля есть флажок **«Глобальные»**: он берёт значение из общих параметров; снятый флажок включает индивидуальное значение, в том числе явное выключение булевого параметра. Настройки сохраняются в локальной SQLite-базе профиля пользователя, а не в проекте и не на телефоне. Экспертные аргументы передаются без shell; `--serial`, `--new-display` и `--start-app` намеренно зарезервированы для безопасного запуска.
+The catalogue is built from the full output of
+`pm list packages --user <current user>`, so it includes apps without a
+regular launcher activity. Turn on **System packages** to see preinstalled ones.
 
-Кнопка `☆` добавляет выбранное приложение в избранное. В плиточном режиме
-избранные приложения отображаются отдельной группой над группой «Все»; поиск и
-фильтр системных пакетов применяются сразу к обеим группам. В таблице избранные
-пакеты отмечаются `★` и поднимаются вверх. Список сохраняется в той же
-SQLite-базе отдельно для каждого физического устройства.
+Names and icons come from `launcher/resources/icon-dumper.dex`. The app
+temporarily pushes it over ADB to `/data/local/tmp/scrcpy-launcher` and runs it
+through Android's `app_process`: it isn't installed as an APK, doesn't appear
+in the app list and needs no root. Android itself renders regular, vector and
+adaptive icons into uniform 144×144 PNGs with the same safe zone. Three ADB
+processes handle separate batches of apps in parallel. Results are kept in a
+persistent local cache keyed by device, package and `versionCode`, together
+with the label and system flag, so the next start only processes new or
+updated apps. If the firmware blocks `app_process`, icons are extracted from
+the APK over ADB instead. Scrcpy isn't involved in building the interface; it's
+only used to launch the app you pick.
 
-Каждый запуск выполняет эквивалент команды:
+**Launch profile** creates a profile for one device and package. Every option
+in a profile has a **Global** switch that takes the value from the global
+scrcpy settings; turning it off sets an individual value, including explicitly
+turning a boolean option off. Expert arguments are passed without a shell;
+`--serial`, `--new-display` and `--start-app` are reserved for the launcher.
+
+The star button adds an app to favorites. In card view, favorites appear in a
+separate **★ Favorites** group above **All**; search and the system-package
+filter apply to both. In table view, favorites are marked with `★` and sorted
+to the top. Profiles and favorites are kept separately for each physical
+device; they and the settings live in a local SQLite database in
+`%LOCALAPPDATA%`, not in the project or on the phone.
+
+Each launch runs the equivalent of:
 
 ```text
-scrcpy --serial <устройство> --new-display[=<размер>/<dpi>] --start-app=[+]<пакет>
+scrcpy --serial <device> --new-display[=<size>/<dpi>] --start-app=[+]<package>
 ```
 
-Поэтому приложение Android открывается в отдельном окне виртуального дисплея. Несколько таких окон могут работать одновременно.
+so every Android app opens in its own virtual display window, and several can
+run at once. Clicking a running app switches to its window; **Active sessions**
+lists the open windows with their logs.
 
+## Screen off and Android 17
+
+On Android 17 (the `separate_timeouts` flag), every regular virtual display
+belongs to the phone's main screen power group, so the app window goes dark
+together with the phone's screen. The launcher therefore ships a patched
+scrcpy server (`launcher/resources/scrcpy-server-5.0`) that creates the display
+through `VirtualDeviceManager`, so it keeps running while the screen is off and
+after the power button. This needs a companion-device association for
+`com.android.shell`, which the launcher creates automatically on devices where
+it's needed. Details, rebuild steps and how to remove the association are in
+[android-helper/README.md](android-helper/README.md).
+
+## Launcher settings
+
+The settings button next to the title opens the interface language, the view to
+start in (cards or table), the base M3 theme colour, the appearance
+(light, dark or system) and whether to pick up the connected phone's
+Material You accent colour.
