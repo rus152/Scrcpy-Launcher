@@ -32,31 +32,31 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt flet-cli pyinstaller
 
-      # One-folder bundle with everything beside the exe (no _internal): the app
-      # finds launcher/resources, launcher/locales and scrcpy/ next to main.py.
-      - name: Build
-        run: >
-          flet pack main.py -y -D -n ScrcpyLauncher
-          --product-name "Scrcpy Launcher" --product-version $($env:TAG.TrimStart('v'))
-          --add-data launcher/resources:launcher/resources launcher/locales:launcher/locales
-          --pyinstaller-build-args=--collect-data=androguard
-          --pyinstaller-build-args=--contents-directory=.
-
-      # Same archive and checks the app uses on first run, so the release works offline.
-      - name: Bundle scrcpy
+      # Same archive and checks the app uses on first run, unpacked to ./scrcpy so it
+      # goes inside the exe and the release works offline.
+      - name: Fetch scrcpy
         run: >
           python -c "import pathlib, urllib.request;
           from launcher.bootstrap import SCRCPY_DOWNLOAD_URL, install_scrcpy_archive;
           archive = pathlib.Path('scrcpy.zip');
           urllib.request.urlretrieve(SCRCPY_DOWNLOAD_URL, archive);
-          install_scrcpy_archive(archive, pathlib.Path('dist/ScrcpyLauncher'))"
+          install_scrcpy_archive(archive, pathlib.Path('.'))"
+
+      # One-file exe. It unpacks itself to a temp folder on every start, so on first
+      # run the app copies the bundled scrcpy to %LOCALAPPDATA% (install_bundled_scrcpy).
+      - name: Build
+        run: >
+          flet pack main.py -y -n ScrcpyLauncher
+          --product-name "Scrcpy Launcher" --product-version $($env:TAG.TrimStart('v'))
+          --add-data launcher/resources:launcher/resources launcher/locales:launcher/locales scrcpy:scrcpy
+          --pyinstaller-build-args=--collect-data=androguard
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $zip = "ScrcpyLauncher-$env:TAG-win64.zip"
-          Compress-Archive -Path dist/ScrcpyLauncher -DestinationPath $zip
+          $exe = "ScrcpyLauncher-$env:TAG-win64.exe"
+          Move-Item dist/ScrcpyLauncher.exe $exe
           gh release view $env:TAG *> $null
           if ($LASTEXITCODE) { gh release create $env:TAG --title $env:TAG --generate-notes }
-          gh release upload $env:TAG $zip --clobber
+          gh release upload $env:TAG $exe --clobber

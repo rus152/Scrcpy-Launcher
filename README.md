@@ -15,10 +15,11 @@ apps you pick, each in its own scrcpy virtual display window.
 
 ## Download
 
-Grab `ScrcpyLauncher-<version>-win64.zip` from
-[Releases](https://github.com/rus152/Scrcpy-Launcher/releases), unpack it
-anywhere and run `ScrcpyLauncher.exe`. Scrcpy and ADB are already inside; no
-Python needed.
+Grab `ScrcpyLauncher-<version>-win64.exe` from
+[Releases](https://github.com/rus152/Scrcpy-Launcher/releases) and run it: it's
+a single file with scrcpy and ADB inside, no Python needed. On first start it
+copies scrcpy and ADB to `%LOCALAPPDATA%\ScrcpyLauncher`, where they run from
+afterwards.
 
 ## Running from source
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import sys
 import tempfile
 from dataclasses import dataclass
 from functools import partial
@@ -27,7 +28,14 @@ from .adb import (
     parse_wm_size,
     detect_form_factor,
 )
-from .bootstrap import SCRCPY_VERSION, ask_language, ensure_scrcpy, missing_scrcpy_files, show_message
+from .bootstrap import (
+    SCRCPY_VERSION,
+    ask_language,
+    ensure_scrcpy,
+    install_bundled_scrcpy,
+    missing_scrcpy_files,
+    show_message,
+)
 from .device_icons import (
     HELPER_MAIN_CLASS,
     HELPER_REMOTE_PATH,
@@ -497,10 +505,10 @@ class SettingsForm:
 class LauncherApp:
     """Flet Material 3 Expressive UI for the scrcpy launcher."""
 
-    def __init__(self, page: ft.Page, project_root: Path, *, first_run: bool = False) -> None:
+    def __init__(self, page: ft.Page, project_root: Path, tools_root: Path, *, first_run: bool = False) -> None:
         self.page = page
         self.project_root = project_root
-        self.adb, self.scrcpy = bundled_tools(project_root)
+        self.adb, self.scrcpy = bundled_tools(tools_root)
         # scrcpy's own server, patched so an app's display outlives the phone's screen
         # (see ENSURE_VIRTUAL_DEVICE_ASSOCIATION). Versioned name: the client refuses a
         # server of another version, so a scrcpy upgrade falls back to the stock one.
@@ -2552,16 +2560,25 @@ async def main_async(page: ft.Page, project_root: Path) -> None:
         startup_store.set_preference("language", chosen_language)
     startup_store.close()
 
-    if missing_scrcpy_files(project_root):
+    # scrcpy/ sits next to main.py when run from source. The release exe runs from a
+    # temp folder deleted on exit, so its bundled scrcpy gets a lasting home instead
+    # (see install_bundled_scrcpy). Versioned, because the patched server only works
+    # with the scrcpy version it was built for.
+    tools_root = project_root
+    if getattr(sys, "frozen", False):
+        tools_root = _data_directory() / f"scrcpy-{SCRCPY_VERSION}"
+        await asyncio.to_thread(install_bundled_scrcpy, project_root, tools_root)
+
+    if missing_scrcpy_files(tools_root):
         # Only the download flow talks to the user; when scrcpy is already unpacked
         # ensure_scrcpy is silent and the window can stay hidden a moment longer.
         await reveal_window(page)
-    if not await ensure_scrcpy(project_root, page):
+    if not await ensure_scrcpy(tools_root, page):
         await page.window.close()
         return
 
     try:
-        launcher = LauncherApp(page, project_root, first_run=first_run)
+        launcher = LauncherApp(page, project_root, tools_root, first_run=first_run)
     except FileNotFoundError as error:
         await reveal_window(page)
         await show_message(page, "Scrcpy Launcher", str(error))

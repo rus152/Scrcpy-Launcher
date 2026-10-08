@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import shutil
 import stat
@@ -96,6 +97,26 @@ def install_scrcpy_archive(archive_path: Path, project_root: Path) -> Path:
     if missing:
         raise OSError(t("install.files_missing_after_extract", missing=", ".join(str(path) for path in missing)))
     return target
+
+
+def install_bundled_scrcpy(bundle_root: Path, target_root: Path) -> None:
+    """Copy the scrcpy shipped inside the one-file exe to ``target_root/scrcpy``, once.
+
+    The exe unpacks itself into a temp folder that is deleted on exit, so scrcpy can't
+    run from there: adb's server outlives the launcher and would keep that folder
+    locked. The copy goes through a staging folder, so an interrupted first start
+    never leaves a half-copied bundle that looks installed. If copying fails,
+    ensure_scrcpy offers the download instead.
+    """
+    if scrcpy_is_installed(target_root) or not scrcpy_is_installed(bundle_root):
+        return
+    target = scrcpy_directory(target_root)
+    staging = target.with_name("scrcpy.partial")
+    with contextlib.suppress(OSError):
+        shutil.rmtree(staging, ignore_errors=True)
+        shutil.copytree(scrcpy_directory(bundle_root), staging)
+        shutil.rmtree(target, ignore_errors=True)
+        staging.rename(target)
 
 
 async def _download_scrcpy(

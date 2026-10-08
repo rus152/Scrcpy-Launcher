@@ -16,10 +16,11 @@ Android-приложения, каждое в своём окне виртуал
 
 ## Загрузка
 
-Скачайте `ScrcpyLauncher-<версия>-win64.zip` со страницы
-[Releases](https://github.com/rus152/Scrcpy-Launcher/releases), распакуйте в
-любое место и запустите `ScrcpyLauncher.exe`. Scrcpy и ADB уже внутри, Python
-не нужен.
+Скачайте `ScrcpyLauncher-<версия>-win64.exe` со страницы
+[Releases](https://github.com/rus152/Scrcpy-Launcher/releases) и запустите:
+это один файл, scrcpy и ADB уже внутри, Python не нужен. При первом запуске
+программа копирует scrcpy и ADB в `%LOCALAPPDATA%\ScrcpyLauncher` и дальше
+запускает их оттуда.
 
 ## Запуск из исходников
 
