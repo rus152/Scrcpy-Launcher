@@ -13,9 +13,16 @@ apps you pick, each in its own scrcpy virtual display window.
   Android 17.
 - Device battery level in the app bar.
 
-## Getting started
+## Download
 
-Requires Windows, Python 3.13+ and a phone with ADB debugging enabled.
+Grab `ScrcpyLauncher-<version>-win64.zip` from
+[Releases](https://github.com/rus152/Scrcpy-Launcher/releases), unpack it
+anywhere and run `ScrcpyLauncher.exe`. Scrcpy and ADB are already inside; no
+Python needed.
+
+## Running from source
+
+Requires Windows, Python 3.12+ and a phone with ADB debugging enabled.
 
 ```powershell
 python -m venv .venv

@@ -14,9 +14,16 @@ Android-приложения, каждое в своём окне виртуал
   числе на Android 17.
 - Уровень заряда устройства в верхней панели.
 
-## Запуск
+## Загрузка
 
-Требуются Windows, Python 3.13+ и телефон с включённой отладкой ADB.
+Скачайте `ScrcpyLauncher-<версия>-win64.zip` со страницы
+[Releases](https://github.com/rus152/Scrcpy-Launcher/releases), распакуйте в
+любое место и запустите `ScrcpyLauncher.exe`. Scrcpy и ADB уже внутри, Python
+не нужен.
+
+## Запуск из исходников
+
+Требуются Windows, Python 3.12+ и телефон с включённой отладкой ADB.
 
 ```powershell
 python -m venv .venv

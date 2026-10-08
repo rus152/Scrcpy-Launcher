@@ -1,0 +1,61 @@
+name: Release
+
+# Builds a portable Windows zip and attaches it to the GitHub release for the tag.
+# Push a `v*` tag to release it, or run it by hand to (re)build an existing tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build, e.g. v0.3
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt flet-cli pyinstaller
+
+      # One-folder bundle: the app finds launcher/resources, launcher/locales and
+      # scrcpy/ next to its own modules, i.e. under _internal.
+      - name: Build
+        run: >
+          flet pack main.py -y -D -n ScrcpyLauncher
+          --product-name "Scrcpy Launcher" --product-version $($env:TAG.TrimStart('v'))
+          --add-data launcher/resources:launcher/resources launcher/locales:launcher/locales
+          --pyinstaller-build-args=--collect-data=androguard
+
+      # Same archive and checks the app uses on first run, so the release works offline.
+      - name: Bundle scrcpy
+        run: >
+          python -c "import pathlib, urllib.request;
+          from launcher.bootstrap import SCRCPY_DOWNLOAD_URL, install_scrcpy_archive;
+          archive = pathlib.Path('scrcpy.zip');
+          urllib.request.urlretrieve(SCRCPY_DOWNLOAD_URL, archive);
+          install_scrcpy_archive(archive, pathlib.Path('dist/ScrcpyLauncher/_internal'))"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = "ScrcpyLauncher-$env:TAG-win64.zip"
+          Compress-Archive -Path dist/ScrcpyLauncher -DestinationPath $zip
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE) { gh release create $env:TAG --title $env:TAG --generate-notes }
+          gh release upload $env:TAG $zip --clobber
